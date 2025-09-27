@@ -1,0 +1,135 @@
+import numpy as np
+import os
+import sys
+import tensorflow as tf
+import cv2
+import smtplib
+import time
+from threading import Thread
+from playsound import playsound
+from object_detection.utils import label_map_util, visualization_utils as vis_util
+
+# Global variables
+ALARM_COOLDOWN = 30  # seconds
+last_alarm_time = 0
+last_email_time = 0
+isPlaying = False
+
+def sound_alarm():
+    global isPlaying, last_alarm_time
+    if not isPlaying:
+        isPlaying = True
+        playsound("D:\\ab.wav")
+        isPlaying = False
+        last_alarm_time = time.time()
+
+def send_email():
+    global last_email_time
+    try:
+		'''
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login("srikavya801@gmail.com", "xqozfgktnwcijvpr")
+        server.sendmail("srikavya801@gmail.com", "nagasrinu482@gmail.com", "Animal Detected in Restricted Area!")
+        server.quit()
+        last_email_time = time.time()
+		'''
+        print("[INFO] Email sent successfully!")
+    except Exception as e:
+        print("[ERROR] Failed to send email:", e)
+
+# Model Preparation
+MODEL_NAME = 'faster_rcnn'
+PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'
+PATH_TO_LABELS = os.path.join('data', 'mscoco_label_map.pbtxt')
+NUM_CLASSES = 90
+
+# Load TensorFlow model
+detection_graph = tf.Graph()
+with detection_graph.as_default():
+    od_graph_def = tf.GraphDef()
+    with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
+        serialized_graph = fid.read()
+        od_graph_def.ParseFromString(serialized_graph)
+        tf.import_graph_def(od_graph_def, name='')
+
+# Load label map
+label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
+categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
+category_index = label_map_util.create_category_index(categories)
+
+# Open Video Stream
+vs = cv2.VideoCapture("test123.avi")
+
+with detection_graph.as_default():
+    with tf.Session(graph=detection_graph) as sess:
+        while True:
+            ret, frame = vs.read()
+            if not ret:
+                break
+            
+            # Convert frame to RGB and expand dimensions
+            image_np = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image_np_expanded = np.expand_dims(image_np, axis=0)
+            
+            # TensorFlow model tensors
+            image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
+            boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
+            scores = detection_graph.get_tensor_by_name('detection_scores:0')
+            classes = detection_graph.get_tensor_by_name('detection_classes:0')
+            num_detections = detection_graph.get_tensor_by_name('num_detections:0')
+            
+            # Perform object detection
+            (boxes, scores, classes, num_detections) = sess.run(
+                [boxes, scores, classes, num_detections],
+                feed_dict={image_tensor: image_np_expanded})
+            
+            # Visualize detection results
+            vis_util.visualize_boxes_and_labels_on_image_array(
+                image_np, np.squeeze(boxes), np.squeeze(classes).astype(np.int32),
+                np.squeeze(scores), category_index, use_normalized_coordinates=True,
+                line_thickness=8)
+            
+            # Process detections
+            current_time = time.time()
+            alert_triggered = False
+            
+            for i, box in enumerate(boxes[0]):
+                class_id = int(classes[0][i])
+                if class_id in [1,2,3,4,5,6,7,8,9,10,16,17,18,19,20,21,22,23,24,25]:  # Animal class IDs
+                    if scores[0][i] >= 0.5:
+                        mid_x = (box[1] + box[3]) / 2
+                        mid_y = (box[0] + box[2]) / 2
+                        apx_distance = round(((1 - (box[3] - box[1])) ** 4), 1)
+                        
+                        cv2.putText(image_np, f'Distance: {apx_distance}',
+                                    (int(mid_x * 800), int(mid_y * 450)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                        
+                        if apx_distance <= 0.5 and 0.3 < mid_x < 0.7:
+                            alert_triggered = True
+                            
+                            if current_time - last_alarm_time > ALARM_COOLDOWN:
+                                print("[ALERT] Animal detected! Playing sound...")
+                                t = Thread(target=sound_alarm)
+                                t.daemon = True
+                                t.start()
+                            
+                            if current_time - last_email_time > ALARM_COOLDOWN:
+                                print("[ALERT] Sending email notification...")
+                                t_email = Thread(target=send_email)
+                                t_email.daemon = True
+                                t_email.start()
+            
+            if alert_triggered:
+                cv2.putText(image_np, "WARNING: Animal Detected!", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+            
+            # Show processed frame
+            cv2.imshow('Object Detection', cv2.resize(image_np, (800, 450)))
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+vs.release()
+cv2.destroyAllWindows()
