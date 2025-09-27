@@ -1,0 +1,7 @@
+open anaconda prompt
+conda activate project
+cd C:\Users\sulem\Desktop\project\object_detection\object_detection
+python driversafe.py
+-----------------------------------------------------
+
+D:\\abs.wav
